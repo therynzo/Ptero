@@ -26,6 +26,15 @@ cat << "EOF" | while read -r line; do echo "$line"; sleep 0.1; done
 EOF
 echo -e "${NC}"
 
+# Animated Subtitle
+SUBTITLE="Powered By TheRynzo"
+echo -e "${RED}"
+for (( i=0; i<${#SUBTITLE}; i++ )); do
+    echo -n "${SUBTITLE:$i:1}"
+    sleep 0.05
+done
+echo -e "${NC}\n"
+
 # Subtitle: VPS Info
 echo -e "${RED}================================================================${NC}"
 echo -e "${WHITE}  SYSTEM INFORMATION${NC}"
@@ -45,7 +54,7 @@ echo -e "${RED}[3]${NC} ${WHITE}Install Cloudflare${NC}"
 echo -e "${RED}[0]${NC} ${WHITE}Exit${NC}"
 echo ""
 
-read -p "$(echo -e ${RED}"Enter choice [1-3]: "${NC})" choice
+read -p "$(echo -e ${RED}"Enter choice [1-0]: "${NC})" choice
 echo ""
 
 case $choice in
