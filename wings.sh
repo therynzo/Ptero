@@ -48,7 +48,7 @@ check_success() {
 # Clear screen and show welcome
 clear
 echo -e "${RED}╔══════════════════════════════════════════╗${NC}"
-echo -e "${RED}║${NC}${RED}     PTERODACTYL WINGS INSTALLER     ${NC}${RED}║${NC}"
+echo -e "${RED}║${NC}${YELLOW}     PTERODACTYL WINGS INSTALLER     ${NC}${RED}║${NC}"
 echo -e "${RED}╚══════════════════════════════════════════╝${NC}"
 
 # Check if running as root
@@ -178,11 +178,11 @@ check_success "Helper created"
 # Complete
 # ------------------------
 print_header "COMPLETE"
-echo -e "${RED}${CHECKMARK} Installation finished${NC}"
+echo -e "${GREEN}${CHECKMARK} Installation finished${NC}"
 echo ""
-echo -e "${RED}Start Wings:${NC}"
+echo -e "${CYAN}Start Wings:${NC}"
 echo -e "  sudo systemctl start wings"
 echo ""
-echo -e "${RED}Use helper:${NC}"
+echo -e "${CYAN}Use helper:${NC}"
 echo -e "  wing"
 echo ""
