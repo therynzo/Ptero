@@ -61,7 +61,7 @@ case $choice in
     1)
         echo -e "${RED}➤ Launching Pterodactyl Installer...${NC}"
         sleep 1
-        bash <(curl -fsSL https://raw.githubusercontent.com/nobita329/ptero/main/ptero/panel/pterodactyl/run.sh)
+        bash <(curl -fsSL https://raw.githubusercontent.com/therynzo/Ptero/main/ptero.sh)
         ;;
     2)
         echo -e "${RED}➤ Launching Wings Installer...${NC}"
