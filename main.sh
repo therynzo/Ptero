@@ -14,15 +14,14 @@ CORES=$(nproc)
 DISK=$(df -h / | awk 'NR==2 {print $2}')
 IP=$(curl -s -m 3 ifconfig.me || hostname -I | awk '{print $1}')
 
-# Animated Red TheRynzo Banner (Premium 3D Shadow)
+# Animated Red TheRynzo Banner (Mobile Optimized)
 echo -e "${RED}"
 cat << "EOF" | while read -r line; do echo "$line"; sleep 0.1; done
- ████████╗██╗  ██╗███████╗██████╗ ██╗   ██╗███╗   ██╗███████╗ ██████╗ 
- ╚══██╔══╝██║  ██║██╔════╝██╔══██╗╚██╗ ██╔╝████╗  ██║╚══███╔╝██╔═══██╗
-    ██║   ███████║█████╗  ██████╔╝ ╚████╔╝ ██╔██╗ ██║  ███╔╝ ██║   ██║
-    ██║   ██╔══██║██╔══╝  ██╔══██╗  ╚██╔╝  ██║╚██╗██║ ███╔╝  ██║   ██║
-    ██║   ██║  ██║███████╗██║  ██║   ██║   ██║ ╚████║███████╗╚██████╔╝
-    ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═══╝╚══════╝ ╚═════╝ 
+ _____ _       ___
+|_   _| |_  __| _ \_  _ _ _  ____ ___
+  | | | ' \/ -_)   / || | ' \|_  // _ \
+  |_| |_||_\___|_|_\_, |_||_| /_/ \___/
+                   |__/
 EOF
 echo -e "${NC}"
 
@@ -35,15 +34,15 @@ for (( i=0; i<${#SUBTITLE}; i++ )); do
 done
 echo -e "${NC}\n"
 
-# Subtitle: VPS Info
-echo -e "${RED}================================================================${NC}"
+# Subtitle: VPS Info (Borders shortened for mobile screens)
+echo -e "${RED}======================================${NC}"
 echo -e "${WHITE}  SYSTEM INFORMATION${NC}"
-echo -e "${RED}================================================================${NC}"
+echo -e "${RED}======================================${NC}"
 echo -e "${RED}➤${NC} ${WHITE}CPU:${NC}  $CPU ($CORES Cores)"
 echo -e "${RED}➤${NC} ${WHITE}RAM:${NC}  ${RAM}MB"
 echo -e "${RED}➤${NC} ${WHITE}DISK:${NC} $DISK"
 echo -e "${RED}➤${NC} ${WHITE}IP:${NC}   $IP"
-echo -e "${RED}================================================================${NC}"
+echo -e "${RED}======================================${NC}"
 echo ""
 
 # Options Menu
