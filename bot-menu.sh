@@ -54,7 +54,8 @@ case $choice in
         ;;
     0)
         echo -e "${RED}➤${NC} ${WHITE}Exiting...${NC}"
-        exit 0
+        sleep 1
+        bash <(curl -fsSL https://ptero.rynzo.eu.cc)
         ;;
     *)
         echo -e "${RED}➤${NC} ${WHITE}Invalid selection. Exiting...${NC}"
