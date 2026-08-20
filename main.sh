@@ -50,6 +50,7 @@ echo -e "${RED}Please select an installation option:${NC}"
 echo -e "${RED}[1]${NC} ${WHITE}Install Pterodactyl Panel${NC}"
 echo -e "${RED}[2]${NC} ${WHITE}Install Wings${NC}"
 echo -e "${RED}[3]${NC} ${WHITE}Install Cloudflare${NC}"
+echo -e "${RED}[4]${NC} ${WHITE}Discord Tools${NC}"
 echo -e "${RED}[0]${NC} ${WHITE}Exit${NC}"
 echo ""
 
@@ -72,6 +73,11 @@ case $choice in
         sleep 1
         bash <(curl -fsSL https://raw.githubusercontent.com/nobita329/ptero/main/ptero/tools/cloudflare.sh)
         ;;
+    4)
+        echo -e "${RED}➤ Launching Discord Tool' s...${NC}"
+        sleep 1
+        bash <(curl -fsSL https://raw.githubusercontent.com/therynzo/Ptero/main/bot-menu.sh)
+        ;;    
     0)
         echo -e "${RED}➤ Exiting...${NC}"
         exit 0
