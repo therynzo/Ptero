@@ -20,7 +20,7 @@ EOF
 echo -e "${NC}"
 
 # Animated Subtitle
-SUBTITLE="cPanel Auto-Installer (DNS & Firewall Patched)"
+SUBTITLE="cPanel Auto-Installer (Default Ports & DNS Fixed)"
 echo -e "${RED}"
 for (( i=0; i<${#SUBTITLE}; i++ )); do
     echo -n "${SUBTITLE:$i:1}"
@@ -34,18 +34,27 @@ if [[ "$EUID" -ne 0 ]]; then
     exit 1
 fi
 
-# 2. Automated DNS Fix (Prevents 'Could not resolve host' errors)
-echo -e "${RED}➤ Injecting reliable DNS resolvers (8.8.8.8 & 1.1.1.1)...${NC}"
-cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+# 2. Forceful DNS Fix (Removes broken symlinks & rebuilds /etc/resolv.conf)
+echo -e "${RED}➤ Repairing system DNS resolution (8.8.8.8 & 1.1.1.1)...${NC}"
+chattr -i /etc/resolv.conf 2>/dev/null || true
+rm -f /etc/resolv.conf
+cat << EOF > /etc/resolv.conf
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+nameserver 8.8.4.4
+EOF
+
+if command -v systemctl >/dev/null 2>&1; then
+    sed -i 's/#DNS=/DNS=8.8.8.8 1.1.1.1/g' /etc/systemd/resolved.conf 2>/dev/null || true
+    systemctl restart systemd-resolved >/dev/null 2>&1 || true
+fi
 
 # 3. OS Compatibility Verification
-echo -e "${RED}➤ Checking OS compatibility with cpanel.net requirements...${NC}"
+echo -e "${RED}➤ Checking OS compatibility...${NC}"
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     if [[ "$ID" != "ubuntu" ]]; then
-        echo -e "${RED}⚠ Warning: Official cPanel installation on Ubuntu requires Ubuntu 20.04 or 22.04 LTS.${NC}"
+        echo -e "${RED}⚠ Warning: Official cPanel installation requires Ubuntu 20.04 or 22.04 LTS.${NC}"
         echo -e "${RED}Detected OS: $PRETTY_NAME${NC}"
         read -p "Do you want to continue anyway? (y/n): " OS_CONFIRM
         if [[ "$OS_CONFIRM" != "y" && "$OS_CONFIRM" != "Y" ]]; then
@@ -102,41 +111,41 @@ echo -e "${RED}➤ Setting system hostname to $DOMAIN...${NC}"
 hostnamectl set-hostname "$DOMAIN" || hostname "$DOMAIN"
 
 # Update Packages & Install Core Tools
-echo -e "${RED}➤ Updating package repository and tools...${NC}"
+echo -e "${RED}➤ Updating package repository...${NC}"
 apt-get update -y && apt-get install -y curl wget ufw lsof ca-certificates
 
-# Open Port 9000 & Standard cPanel Ports
-echo -e "${RED}➤ Opening Port 9000 & standard cPanel/WHM ports (2082, 2083, 2086, 2087)...${NC}"
+# Open Standard cPanel/WHM Default Ports
+echo -e "${RED}➤ Opening default cPanel/WHM ports (2082, 2083, 2086, 2087, 80, 443)...${NC}"
 if command -v ufw >/dev/null 2>&1; then
-    ufw allow 9000/tcp comment 'Custom Port 9000' >/dev/null 2>&1 || true
-    ufw allow 2082/tcp >/dev/null 2>&1 || true
-    ufw allow 2083/tcp >/dev/null 2>&1 || true
-    ufw allow 2086/tcp >/dev/null 2>&1 || true
-    ufw allow 2087/tcp >/dev/null 2>&1 || true
-    ufw allow 80/tcp >/dev/null 2>&1 || true
-    ufw allow 443/tcp >/dev/null 2>&1 || true
+    ufw allow 2082/tcp comment 'cPanel HTTP' >/dev/null 2>&1 || true
+    ufw allow 2083/tcp comment 'cPanel HTTPS' >/dev/null 2>&1 || true
+    ufw allow 2086/tcp comment 'WHM HTTP' >/dev/null 2>&1 || true
+    ufw allow 2087/tcp comment 'WHM HTTPS' >/dev/null 2>&1 || true
+    ufw allow 2095/tcp comment 'Webmail HTTP' >/dev/null 2>&1 || true
+    ufw allow 2096/tcp comment 'Webmail HTTPS' >/dev/null 2>&1 || true
+    ufw allow 80/tcp comment 'HTTP' >/dev/null 2>&1 || true
+    ufw allow 443/tcp comment 'HTTPS' >/dev/null 2>&1 || true
 fi
 
 if command -v iptables >/dev/null 2>&1; then
-    iptables -I INPUT -p tcp --dport 9000 -j ACCEPT >/dev/null 2>&1 || true
     iptables -I INPUT -p tcp --dport 2087 -j ACCEPT >/dev/null 2>&1 || true
     iptables -I INPUT -p tcp --dport 2083 -j ACCEPT >/dev/null 2>&1 || true
 fi
 
-# Download Installer with Mirror Fallback
-echo -e "${RED}➤ Downloading official cPanel installer...${NC}"
+# Download Installer using Official cPanel URLs
+echo -e "${RED}➤ Downloading official cPanel installer from cPanel mirrors...${NC}"
 cd /home
 rm -f latest
 
-if curl -o latest -L https://secured.cpanel.net/latest; then
-    echo -e "${RED}✔ Successfully pulled installer from primary mirror.${NC}"
+if curl -o latest -L https://securedownloads.cpanel.net/latest; then
+    echo -e "${RED}✔ Successfully downloaded installer from primary cPanel server.${NC}"
 else
     echo -e "${RED}⚠ Primary mirror failed, trying secondary fallback mirror...${NC}"
-    curl -o latest -L https://installer.cpanel.net/latest
+    curl -o latest -L http://httpupdate.cpanel.net/latest
 fi
 
 # Execute Installer
-echo -e "${RED}➤ Launching cPanel installation process (takes 15-30 minutes)...${NC}"
+echo -e "${RED}➤ Launching official cPanel installation process (takes 15-30 minutes)...${NC}"
 sh latest
 
 PUBLIC_IP=$(curl -s -m 5 ifconfig.me || hostname -I | awk '{print $1}')
@@ -144,9 +153,8 @@ PUBLIC_IP=$(curl -s -m 5 ifconfig.me || hostname -I | awk '{print $1}')
 echo -e "\n${RED}====================================================${NC}"
 echo -e "${WHITE}  CPANEL INSTALLATION COMPLETE${NC}"
 echo -e "${RED}====================================================${NC}"
-echo -e "${RED}➤ WHM Admin URL   :${NC} ${WHITE}https://$PUBLIC_IP:2087${NC} or ${WHITE}https://$DOMAIN:2087${NC}"
-echo -e "${RED}➤ cPanel User URL  :${NC} ${WHITE}https://$PUBLIC_IP:2083${NC} or ${WHITE}https://$DOMAIN:2083${NC}"
-echo -e "${RED}➤ Port 9000 Status :${NC} ${WHITE}OPENED${NC}"
-echo -e "${RED}➤ Admin Email     :${NC} ${WHITE}$EMAIL${NC}"
-echo -e "${RED}➤ Hostname        :${NC} ${WHITE}$DOMAIN${NC}"
+echo -e "${RED}➤ WHM Admin (Default SSL)  :${NC} ${WHITE}https://$PUBLIC_IP:2087${NC} or ${WHITE}https://$DOMAIN:2087${NC}"
+echo -e "${RED}➤ cPanel User (Default SSL) :${NC} ${WHITE}https://$PUBLIC_IP:2083${NC} or ${WHITE}https://$DOMAIN:2083${NC}"
+echo -e "${RED}➤ Admin Email              :${NC} ${WHITE}$EMAIL${NC}"
+echo -e "${RED}➤ Hostname                 :${NC} ${WHITE}$DOMAIN${NC}"
 echo -e "${RED}====================================================${NC}\n"
