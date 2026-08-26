@@ -10,7 +10,7 @@ clear
 
 # Animated Red TheRynzo Banner
 echo -e "${RED}"
-cat << "EOF" | while read -r line; do echo "$line"; sleep 0.05; done
+cat << "EOF" | while read -r line; do echo "$line"; sleep 0.03; done
  _____ _       ___
 |_   _| |_ ___| _ \_  _ _ _  ____ ___
   | | | ' \ -_)   / || | ' \|_  // _ \
@@ -20,7 +20,7 @@ EOF
 echo -e "${NC}"
 
 # Animated Subtitle
-SUBTITLE="cPanel Auto-Installer"
+SUBTITLE="cPanel Auto-Installer (DNS & Firewall Patched)"
 echo -e "${RED}"
 for (( i=0; i<${#SUBTITLE}; i++ )); do
     echo -n "${SUBTITLE:$i:1}"
@@ -34,8 +34,14 @@ if [[ "$EUID" -ne 0 ]]; then
     exit 1
 fi
 
-# 2. OS Compatibility Verification (Ubuntu 20.04 / 22.04 LTS per cpanel.net)
-echo -e "${RED}➤${NC} ${WHITE}Checking system compatibility with cpanel.net requirements...${NC}"
+# 2. Automated DNS Fix (Prevents 'Could not resolve host' errors)
+echo -e "${RED}➤ Injecting reliable DNS resolvers (8.8.8.8 & 1.1.1.1)...${NC}"
+cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+
+# 3. OS Compatibility Verification
+echo -e "${RED}➤ Checking OS compatibility with cpanel.net requirements...${NC}"
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     if [[ "$ID" != "ubuntu" ]]; then
@@ -58,7 +64,7 @@ echo -e "${RED}====================================================${NC}"
 
 # Step 1: Domain / Hostname Input
 while true; do
-    echo -ne "${RED}➤ Step 1: Enter your FQDN Domain/Hostname (e.g., cpanel.yourdomain.com): ${NC}"
+    echo -ne "${RED}➤ Step 1: Enter your FQDN Domain/Hostname (e.g., cpanel.nexiohost.net): ${NC}"
     read DOMAIN
     if [ -z "$DOMAIN" ]; then
         echo -e "${RED}Domain cannot be empty.${NC}"
@@ -95,11 +101,11 @@ echo -e "${RED}====================================================${NC}\n"
 echo -e "${RED}➤ Setting system hostname to $DOMAIN...${NC}"
 hostnamectl set-hostname "$DOMAIN" || hostname "$DOMAIN"
 
-# Update Packages
-echo -e "${RED}➤ Updating package repository...${NC}"
-apt-get update -y && apt-get install -y curl wget ufw lsof
+# Update Packages & Install Core Tools
+echo -e "${RED}➤ Updating package repository and tools...${NC}"
+apt-get update -y && apt-get install -y curl wget ufw lsof ca-certificates
 
-# Open Port 9000 & cPanel Ports
+# Open Port 9000 & Standard cPanel Ports
 echo -e "${RED}➤ Opening Port 9000 & standard cPanel/WHM ports (2082, 2083, 2086, 2087)...${NC}"
 if command -v ufw >/dev/null 2>&1; then
     ufw allow 9000/tcp comment 'Custom Port 9000' >/dev/null 2>&1 || true
@@ -117,10 +123,20 @@ if command -v iptables >/dev/null 2>&1; then
     iptables -I INPUT -p tcp --dport 2083 -j ACCEPT >/dev/null 2>&1 || true
 fi
 
-# Download and Execute Official cPanel Installer from cPanel.net
-echo -e "${RED}➤ Downloading official installer from cpanel.net...${NC}"
+# Download Installer with Mirror Fallback
+echo -e "${RED}➤ Downloading official cPanel installer...${NC}"
 cd /home
-curl -o latest -L https://secured.cpanel.net/latest
+rm -f latest
+
+if curl -o latest -L https://secured.cpanel.net/latest; then
+    echo -e "${RED}✔ Successfully pulled installer from primary mirror.${NC}"
+else
+    echo -e "${RED}⚠ Primary mirror failed, trying secondary fallback mirror...${NC}"
+    curl -o latest -L https://installer.cpanel.net/latest
+fi
+
+# Execute Installer
+echo -e "${RED}➤ Launching cPanel installation process (takes 15-30 minutes)...${NC}"
 sh latest
 
 PUBLIC_IP=$(curl -s -m 5 ifconfig.me || hostname -I | awk '{print $1}')
