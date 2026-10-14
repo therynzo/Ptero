@@ -1,265 +1,525 @@
-#!/usr/bin/env bash
-# Reviactyl migration installer / safe uninstaller
+#!/bin/bash
+# ============================================================
+# REVI ACTYL PANEL INSTALLER & MANAGER
 # Made by TheRynzo
-# Intended for Debian/Ubuntu systems with an existing Pterodactyl/Reviactyl panel.
+# Ubuntu 24.04 | PHP 8.3+ | Nginx | MariaDB | Redis
+# ============================================================
 
 set -Eeuo pipefail
 export PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
 
 PANEL_DIR="${PANEL_DIR:-/var/www/pterodactyl}"
-BACKUP_DIR="${BACKUP_DIR:-/root/reviactyl-backups}"
+BACKUP_DIR="/root/reviactyl-backups"
+DOMAIN="${PANEL_DOMAIN:-gp.aliennode.in}"
 RELEASE_URL="https://github.com/reviactyl/panel/releases/latest/download/panel.tar.gz"
 
-RED=$'\033[0;31m'
-LIGHT_RED=$'\033[1;31m'
-WHITE=$'\033[1;37m'
-GRAY=$'\033[0;90m'
 RESET=$'\033[0m'
+WHITE=$'\033[1;37m'
+RED=$'\033[38;2;255;70;70m'
+GREEN=$'\033[38;2;80;255;130m'
+YELLOW=$'\033[38;2;255;210;80m'
+BLUE=$'\033[38;2;100;180;255m'
 
-pause() { read -r -p $'\nPress Enter to return to the menu...' _; }
+# ------------------------------------------------------------
+# ERROR HANDLING
+# ------------------------------------------------------------
+
+on_error() {
+    local code=$?
+    echo
+    printf '%s[ERROR]%s Script failed at line %s (exit code %s).\n' \
+        "$RED" "$RESET" "${BASH_LINENO[0]:-unknown}" "$code"
+    echo "If migration failed, preserve the backups in $BACKUP_DIR."
+    echo "Do not delete your database or generate a new APP_KEY."
+    exit "$code"
+}
+trap on_error ERR
+
+# ------------------------------------------------------------
+# BANNER
+# Light red at the top, dark red at the bottom
+# ------------------------------------------------------------
 
 banner() {
     clear 2>/dev/null || true
-    local lines=(
-' _____ _   _ _____ ____  _____ _   _ _____ ___  '
-'|_   _| | | | ____|  _ \\|_   _| | | |_   _/ _ \\ '
-'  | | | |_| |  _| | |_) | | | | |_| | | || | | |'
-'  | | |  _  | |___|  _ <  | | |  _  | | || |_| |'
-'  |_| |_| |_|_____|_| \\_\\ |_| |_| |_| |_| \\___/'
-    )
-    local colors=(255 217 196 160 124)
-    local i
-    printf '\n'
-    for i in "${!lines[@]}"; do
-        # Gradient runs from light red at the top to dark red at the bottom.
-        case "$i" in
-            0) printf '\033[38;2;255;150;150m%s\033[0m\n' "${lines[$i]}" ;;
-            1) printf '\033[38;2;255;105;105m%s\033[0m\n' "${lines[$i]}" ;;
-            2) printf '\033[38;2;230;55;55m%s\033[0m\n' "${lines[$i]}" ;;
-            3) printf '\033[38;2;190;20;20m%s\033[0m\n' "${lines[$i]}" ;;
-            *) printf '\033[38;2;125;0;0m%s\033[0m\n' "${lines[$i]}" ;;
-        esac
-    done
-    printf '\n  %sREVI ACTYL PANEL MANAGER%s\n' "$WHITE" "$RESET"
-    printf '  %sMade by TheRynzo | Backup-first installer%s\n\n' "$LIGHT_RED" "$RESET"
+
+    printf '\033[38;2;255;170;170m'
+    printf ' _____ _   _ _____ ____  _____ _   _ _____ ___\n'
+
+    printf '\033[38;2;255;115;115m'
+    printf '|_   _| | | | ____|  _ \\|_   _| | | |_   _/ _ \\\n'
+
+    printf '\033[38;2;230;55;55m'
+    printf '  | | | |_| |  _| | |_) | | | | |_| | | || | | |\n'
+
+    printf '\033[38;2;185;25;25m'
+    printf '  | | |  _  | |___|  _ <  | | |  _  | | || |_| |\n'
+
+    printf '\033[38;2;120;0;0m'
+    printf '  |_| |_| |_|_____|_| \\_\\ |_| |_| |_| |_| \\___/\n'
+
+    printf '%s\n' "$RESET"
+    printf '%s       REVI ACTYL PANEL MANAGER%s\n' "$WHITE" "$RESET"
+    printf '%s          Made by TheRynzo%s\n' "$RED" "$RESET"
+    printf '%s========================================%s\n' "$RED" "$RESET"
+    printf '%s Domain: %s%s\n' "$BLUE" "$DOMAIN" "$RESET"
+    printf '%s Panel:  %s%s\n\n' "$BLUE" "$PANEL_DIR" "$RESET"
 }
 
-need_root() {
-    if [[ "${EUID}" -ne 0 ]]; then
-        printf '%sRun this script as root: sudo bash %s%s\n' "$RED" "$0" "$RESET" >&2
+# ------------------------------------------------------------
+# ROOT AND OPERATING SYSTEM CHECKS
+# ------------------------------------------------------------
+
+require_root() {
+    if [[ "$EUID" -ne 0 ]]; then
+        echo "Please run this script as root."
         exit 1
     fi
 }
 
-read_env_value() {
-    local key="$1" line value
-    line="$(grep -m1 -E "^${key}=" "$PANEL_DIR/.env" 2>/dev/null || true)"
-    [[ -n "$line" ]] || { printf ''; return; }
-    value="${line#*=}"
-    value="${value%$'\r'}"
-    # Remove one pair of surrounding quotes; credentials containing quotes should be quoted in .env.
-    if [[ "$value" == \\\"*\\\" ]]; then value="${value:1:${#value}-2}"; fi
-    if [[ "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
-    printf '%s' "$value"
-}
-
 check_os() {
-    if [[ -r /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        case "${ID:-}" in
-            ubuntu|debian) ;;
-            *) printf '%sThis script is intended for Ubuntu/Debian. Detected: %s%s\n' "$RED" "${PRETTY_NAME:-unknown}" "$RESET"; return 1 ;;
-        esac
-    fi
-}
-
-install_dependencies() {
-    printf '\n%s[1/6] Installing required PHP 8.3 and system packages...%s\n' "$LIGHT_RED" "$RESET"
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y \
-        ca-certificates curl tar unzip git \
-        nginx mariadb-server redis-server \
-        php8.3-cli php8.3-common php8.3-gd php8.3-mysql php8.3-mbstring \
-        php8.3-bcmath php8.3-xml php8.3-fpm php8.3-curl php8.3-zip \
-        php8.3-intl php8.3-redis php8.3-sqlite3
-
-    if ! command -v composer >/dev/null 2>&1; then
-        printf '%sComposer was not found. Installing Composer v2...%s\n' "$LIGHT_RED" "$RESET"
-        curl -fsSL https://getcomposer.org/installer -o /tmp/composer-setup.php
-        php /tmp/composer-setup.php --2 --install-dir=/usr/local/bin --filename=composer
-        rm -f /tmp/composer-setup.php
-    fi
-    command -v composer >/dev/null 2>&1 || { printf '%sERROR: Composer is still unavailable.%s\n' "$RED" "$RESET"; return 1; }
-    php -r 'exit(PHP_VERSION_ID >= 80300 ? 0 : 1);' || {
-        printf '%sERROR: Reviactyl v26 requires PHP 8.3 or later. Current CLI: %s%s\n' "$RED" "$(php -v | head -n1)" "$RESET"
+    if [[ ! -f /etc/os-release ]]; then
+        echo "Cannot identify the operating system."
         return 1
-    }
-}
+    fi
 
-backup_existing_panel() {
-    local stamp db_name db_user db_pass db_host db_port db_connection app_backup db_backup env_backup
-    stamp="$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    chmod 700 "$BACKUP_DIR"
-    app_backup="$BACKUP_DIR/panel-files-${stamp}.tar.gz"
-    db_backup="$BACKUP_DIR/panel-database-${stamp}.sql"
-    env_backup="$BACKUP_DIR/panel-env-${stamp}.env"
+    . /etc/os-release
 
-    printf '\n%s[BACKUP] Creating full panel-file backup...%s\n' "$LIGHT_RED" "$RESET"
-    tar -czf "$app_backup" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
-    [[ -s "$app_backup" ]] || { printf '%sERROR: Panel-file backup failed.%s\n' "$RED" "$RESET"; return 1; }
-    cp -a "$PANEL_DIR/.env" "$env_backup"
-    chmod 600 "$app_backup" "$env_backup"
-
-    db_connection="$(read_env_value DB_CONNECTION)"
-    db_name="$(read_env_value DB_DATABASE)"
-    db_user="$(read_env_value DB_USERNAME)"
-    db_pass="$(read_env_value DB_PASSWORD)"
-    db_host="$(read_env_value DB_HOST)"
-    db_port="$(read_env_value DB_PORT)"
-    db_host="${db_host:-127.0.0.1}"
-    db_port="${db_port:-3306}"
-
-    case "${db_connection:-mysql}" in
-        mysql|mariadb|"")
-            [[ -n "$db_name" ]] || { printf '%sERROR: DB_DATABASE is empty in .env; cannot safely back up the database.%s\n' "$RED" "$RESET"; return 1; }
-            printf '%s[BACKUP] Backing up database "%s"...%s\n' "$LIGHT_RED" "$db_name" "$RESET"
-            if MYSQL_PWD="$db_pass" mariadb-dump --host="$db_host" --port="$db_port" --user="${db_user:-root}" --single-transaction --quick --skip-lock-tables "$db_name" > "$db_backup" 2>"$BACKUP_DIR/dump-error-${stamp}.log"; then
-                :
-            elif mariadb-dump --single-transaction --quick --skip-lock-tables "$db_name" > "$db_backup" 2>"$BACKUP_DIR/dump-error-${stamp}.log"; then
-                :
-            else
-                rm -f "$db_backup"
-                printf '%sERROR: Database backup failed. See %s/dump-error-%s.log. Nothing was migrated or uninstalled.%s\n' "$RED" "$BACKUP_DIR" "$stamp" "$RESET"
-                return 1
-            fi
-            [[ -s "$db_backup" ]] || { printf '%sERROR: Database dump is empty; stopping.%s\n' "$RED" "$RESET"; return 1; }
-            chmod 600 "$db_backup"
+    case "${ID:-}" in
+        ubuntu|debian)
+            echo "Detected operating system: ${PRETTY_NAME:-$ID}"
             ;;
         *)
-            printf '%sERROR: This script currently backs up MySQL/MariaDB only. DB_CONNECTION=%s. No changes made.%s\n' "$RED" "$db_connection" "$RESET"
+            echo "This script supports Ubuntu and Debian."
+            echo "Detected: ${PRETTY_NAME:-unknown}"
             return 1
             ;;
     esac
-
-    printf '\n%sBackup completed:%s\n  Panel: %s\n  Database: %s\n  Environment: %s\n' "$WHITE" "$RESET" "$app_backup" "$db_backup" "$env_backup"
 }
 
-install_or_migrate() {
-    local workdir archive answer maria_version
-    if [[ ! -d "$PANEL_DIR" || ! -f "$PANEL_DIR/.env" || ! -f "$PANEL_DIR/artisan" ]]; then
-        printf '%sExpected an existing Pterodactyl/Reviactyl panel with .env and artisan at %s.%s\n' "$RED" "$PANEL_DIR" "$RESET"
-        printf 'This option is for migration, not a brand-new installation. Change PANEL_DIR before running if your panel is elsewhere.\n'
+# ------------------------------------------------------------
+# ENVIRONMENT FILE READER
+# Uses Laravel's installed Dotenv parser.
+# Values are never printed.
+# ------------------------------------------------------------
+
+env_value() {
+    local key="$1"
+
+    PANEL_ROOT="$PANEL_DIR" ENV_KEY="$key" php -r '
+        require getenv("PANEL_ROOT") . "/vendor/autoload.php";
+        $file = getenv("PANEL_ROOT") . "/.env";
+        $data = \Dotenv\Dotenv::parse(file_get_contents($file));
+        echo $data[getenv("ENV_KEY")] ?? "";
+    '
+}
+
+# ------------------------------------------------------------
+# VALIDATE EXISTING PANEL
+# ------------------------------------------------------------
+
+check_panel() {
+    if [[ ! -f "$PANEL_DIR/artisan" ||
+          ! -f "$PANEL_DIR/composer.json" ||
+          ! -f "$PANEL_DIR/.env" ||
+          ! -f "$PANEL_DIR/vendor/autoload.php" ]]; then
+        echo "An existing, initialized panel was not found."
+        echo "Expected location: $PANEL_DIR"
+        echo "This menu option migrates an existing panel."
         return 1
     fi
+
     if ! grep -q '^APP_KEY=base64:.\{20,\}' "$PANEL_DIR/.env"; then
-        printf '%sERROR: APP_KEY is missing/invalid. Stopping to avoid damaging encrypted data.%s\n' "$RED" "$RESET"
+        echo "ERROR: APP_KEY is missing or invalid."
+        echo "Restore the original key before continuing."
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------
+# BACKUP FILES AND DATABASE
+# ------------------------------------------------------------
+
+backup_panel() {
+    local stamp app_backup db_backup env_backup
+    local db_name db_user db_password db_host db_port
+
+    echo
+    printf '%s[BACKUP] Starting backup...%s\n' "$YELLOW" "$RESET"
+
+    mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR"
+
+    stamp="$(date +%Y%m%d-%H%M%S)"
+
+    app_backup="$BACKUP_DIR/panel-files-$stamp.tar.gz"
+    db_backup="$BACKUP_DIR/panel-database-$stamp.sql"
+    env_backup="$BACKUP_DIR/panel-env-$stamp.env"
+
+    # Preserve application files, including the existing APP_KEY.
+    tar -czf "$app_backup" \
+        -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
+
+    cp -a "$PANEL_DIR/.env" "$env_backup"
+    chmod 600 "$app_backup" "$env_backup"
+
+    # Read the database connection from .env without printing secrets.
+    db_name="$(env_value DB_DATABASE)"
+    db_user="$(env_value DB_USERNAME)"
+    db_password="$(env_value DB_PASSWORD)"
+    db_host="$(env_value DB_HOST)"
+    db_port="$(env_value DB_PORT)"
+
+    db_host="${db_host:-127.0.0.1}"
+    db_port="${db_port:-3306}"
+
+    if [[ -z "$db_name" ]]; then
+        echo "ERROR: DB_DATABASE is empty."
         return 1
     fi
 
-    printf '\n%sWARNING:%s This will replace the application code at %s with the latest Reviactyl release.\n' "$LIGHT_RED" "$RESET" "$PANEL_DIR"
-    printf 'It preserves .env, storage, extensions, public and database folders, and creates file + database backups first.\n'
-    printf 'Your database will be migrated/seeds may update eggs; your app encryption key will NOT be regenerated.\n\n'
-    read -r -p 'Type MIGRATE to continue: ' answer
-    [[ "$answer" == "MIGRATE" ]] || { echo 'Cancelled.'; return 0; }
+    echo "Backing up database: $db_name"
 
+    if ! MYSQL_PWD="$db_password" mariadb-dump \
+        --host="$db_host" \
+        --port="$db_port" \
+        --user="${db_user:-root}" \
+        --single-transaction \
+        --quick \
+        --skip-lock-tables \
+        "$db_name" > "$db_backup"; then
+
+        echo "Database credentials failed; trying local root access."
+
+        if ! mariadb-dump \
+            --single-transaction \
+            --quick \
+            --skip-lock-tables \
+            "$db_name" > "$db_backup"; then
+            rm -f "$db_backup"
+            echo "ERROR: Database backup failed. Aborting."
+            return 1
+        fi
+    fi
+
+    if [[ ! -s "$db_backup" ]]; then
+        echo "ERROR: The database backup is empty."
+        return 1
+    fi
+
+    chmod 600 "$db_backup"
+
+    printf '%s[OK]%s Backups created successfully.\n' "$GREEN" "$RESET"
+    echo "Application: $app_backup"
+    echo "Database:    $db_backup"
+    echo "Environment: $env_backup"
+}
+
+# ------------------------------------------------------------
+# INSTALL DEPENDENCIES
+# Uses the current PHP CLI version.
+# ------------------------------------------------------------
+
+install_dependencies() {
+    local php_version
+
+    echo
+    printf '%s[1/6] Installing dependencies...%s\n' "$BLUE" "$RESET"
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+
+    php_version="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || true)"
+
+    if [[ -z "$php_version" ]]; then
+        echo "PHP is not installed. Install PHP 8.3 or newer first."
+        return 1
+    fi
+
+    if [[ "$(printf '%s\n' 8.3 "$php_version" | sort -V | head -n1)" != "8.3" ]]; then
+        echo "PHP 8.3 or newer is required. Detected: $php_version"
+        return 1
+    fi
+
+    apt-get install -y \
+        curl ca-certificates tar unzip git \
+        nginx mariadb-server redis-server \
+        "php${php_version}-cli" \
+        "php${php_version}-common" \
+        "php${php_version}-gd" \
+        "php${php_version}-mysql" \
+        "php${php_version}-mbstring" \
+        "php${php_version}-bcmath" \
+        "php${php_version}-xml" \
+        "php${php_version}-fpm" \
+        "php${php_version}-curl" \
+        "php${php_version}-zip" \
+        "php${php_version}-intl" \
+        "php${php_version}-redis" \
+        "php${php_version}-sqlite3"
+
+    if ! command -v composer >/dev/null 2>&1; then
+        echo "Installing Composer..."
+
+        curl -fsSL https://getcomposer.org/installer \
+            -o /tmp/composer-installer.php
+
+        php /tmp/composer-installer.php \
+            --2 \
+            --install-dir=/usr/local/bin \
+            --filename=composer
+
+        rm -f /tmp/composer-installer.php
+    fi
+
+    composer --version
+
+    echo "Dependencies installed."
+}
+
+# ------------------------------------------------------------
+# INSTALL / MIGRATE REVI ACTYL
+# ------------------------------------------------------------
+
+install_reviactyl() {
+    local confirmation workdir archive php_version maria_version maria_major
+
+    check_panel
     check_os
-    install_dependencies
-    backup_existing_panel
 
-    maria_version="$(mariadb --version 2>/dev/null || true)"
-    if [[ "$maria_version" =~ 10\.([0-9]+) ]]; then
-        printf '\n%sCompatibility warning:%s %s\nReviactyl documentation lists MariaDB 11 or newer. This VPS appears to use MariaDB 10.x. The script will NOT upgrade MariaDB automatically.\n' "$LIGHT_RED" "$RESET" "$maria_version"
-        read -r -p 'Continue anyway? Type CONTINUE to proceed: ' answer
-        [[ "$answer" == "CONTINUE" ]] || { echo 'Cancelled before replacing panel files. Backups were retained.'; return 0; }
+    echo
+    printf '%sWARNING: EXISTING PANEL MIGRATION%s\n' "$YELLOW" "$RESET"
+    echo "Target: $PANEL_DIR"
+    echo "Release: $RELEASE_URL"
+    echo
+    echo "This will replace the application code with Reviactyl."
+    echo "The script preserves .env, storage, public, extensions and database."
+    echo "A new application key will NOT be generated."
+    echo
+
+    read -r -p 'Type MIGRATE to continue: ' confirmation
+
+    if [[ "$confirmation" != "MIGRATE" ]]; then
+        echo "Migration cancelled."
+        return 0
     fi
 
-    workdir="$(mktemp -d /tmp/reviactyl-install.XXXXXX)"
+    # Backup must complete before any migration changes.
+    backup_panel
+
+    install_dependencies
+
+    # Current Reviactyl documentation recommends MariaDB 11 or newer.
+    maria_version="$(mariadb --version 2>/dev/null || true)"
+
+    if [[ "$maria_version" =~ Distrib[[:space:]]([0-9]+)\. ]]; then
+        maria_major="${BASH_REMATCH[1]}"
+
+        if (( maria_major < 11 )); then
+            echo
+            printf '%sWARNING: DATABASE VERSION%s\n' "$YELLOW" "$RESET"
+            echo "$maria_version"
+            echo "The documentation you supplied specifies MariaDB 11 or newer."
+            echo "This script will not automatically upgrade or replace your database."
+
+            read -r -p 'Type CONTINUE to proceed with this version: ' confirmation
+
+            if [[ "$confirmation" != "CONTINUE" ]]; then
+                echo "Migration cancelled. Backups are preserved."
+                return 0
+            fi
+        fi
+    fi
+
+    workdir="$(mktemp -d /tmp/reviactyl.XXXXXX)"
     archive="$workdir/panel.tar.gz"
-    trap 'rm -rf "${workdir:-}"' RETURN
-    printf '\n%s[2/6] Downloading the latest Reviactyl release...%s\n' "$LIGHT_RED" "$RESET"
-    curl -fL --retry 3 --retry-delay 2 "$RELEASE_URL" -o "$archive"
+
+    echo
+    printf '%s[2/6] Downloading Reviactyl release...%s\n' "$BLUE" "$RESET"
+
+    curl -fL --retry 3 --retry-delay 2 \
+        "$RELEASE_URL" -o "$archive"
+
     tar -tzf "$archive" >/dev/null
-    tar -xzf "$archive" -C "$workdir"
-    [[ -f "$workdir/artisan" && -f "$workdir/composer.json" ]] || { printf '%sERROR: Release archive does not contain artisan/composer.json; refusing to install.%s\n' "$RED" "$RESET"; return 1; }
 
-    printf '%s[3/6] Replacing application code while preserving user data...%s\n' "$LIGHT_RED" "$RESET"
-    # Match the official Reviactyl update/migration approach, after making full backups.
-    find "$PANEL_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name 'public' ! -name '.env' ! -name 'extensions' \
-        ! -name 'storage' ! -name 'database' -exec rm -rf -- {} +
-    tar -xzf "$archive" -C "$PANEL_DIR"
-    [[ -f "$PANEL_DIR/artisan" && -f "$PANEL_DIR/.env" ]] || {
-        printf '%sERROR: Deployment verification failed. Restore the panel from the backup shown above before using it.%s\n' "$RED" "$RESET"
+    if ! tar -tzf "$archive" | grep -qx 'artisan'; then
+        rm -rf "$workdir"
+        echo "ERROR: The release archive does not contain artisan at its root."
         return 1
-    }
+    fi
 
-    printf '%s[4/6] Installing Composer dependencies...%s\n' "$LIGHT_RED" "$RESET"
+    echo
+    printf '%s[3/6] Replacing application files...%s\n' "$BLUE" "$RESET"
+
+    # Follow the supplied Reviactyl migration instructions:
+    # preserve environment, storage, public assets and extensions.
+    find "$PANEL_DIR" \
+        -mindepth 1 -maxdepth 1 \
+        ! -name '.env' \
+        ! -name 'storage' \
+        ! -name 'public' \
+        ! -name 'extensions' \
+        ! -name 'database' \
+        -exec rm -rf -- {} +
+
+    tar -xzf "$archive" -C "$PANEL_DIR"
+
+    rm -rf "$workdir"
+
     cd "$PANEL_DIR"
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction
 
-    printf '%s[5/6] Running database migrations and seeders...%s\n' "$LIGHT_RED" "$RESET"
+    echo
+    printf '%s[4/6] Installing Composer dependencies...%s\n' "$BLUE" "$RESET"
+
+    COMPOSER_ALLOW_SUPERUSER=1 composer install \
+        --no-dev \
+        --optimize-autoloader \
+        --no-interaction
+
+    echo
+    printf '%s[5/6] Running database migrations...%s\n' "$BLUE" "$RESET"
+
+    # Do not reset or drop the database.
+    # Do not replace the existing encryption key.
     php artisan migrate --seed --force
     php artisan optimize:clear
-    php artisan up || true
 
-    printf '%s[6/6] Applying permissions and restarting services...%s\n' "$LIGHT_RED" "$RESET"
-    chown -R www-data:www-data "$PANEL_DIR"
+    echo
+    printf '%s[6/6] Fixing permissions and restarting services...%s\n' "$BLUE" "$RESET"
+
+    php_version="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
+
+    install -d \
+        -o www-data -g www-data -m 775 \
+        "$PANEL_DIR/storage" \
+        "$PANEL_DIR/storage/logs" \
+        "$PANEL_DIR/bootstrap/cache"
+
+    chown -R www-data:www-data \
+        "$PANEL_DIR/storage" \
+        "$PANEL_DIR/bootstrap/cache"
+
+    chmod -R 775 \
+        "$PANEL_DIR/storage" \
+        "$PANEL_DIR/bootstrap/cache"
+
+    # Keep the environment file protected.
     chown root:www-data "$PANEL_DIR/.env"
     chmod 640 "$PANEL_DIR/.env"
-    install -d -o www-data -g www-data -m 775 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache" "$PANEL_DIR/storage/logs"
-    chown -R www-data:www-data "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
-    chmod -R 775 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
+
+    systemctl enable --now mariadb redis-server "php${php_version}-fpm"
+
     nginx -t
-    systemctl restart php8.3-fpm nginx mariadb redis-server
-    if systemctl cat reviq.service >/dev/null 2>&1; then systemctl restart reviq.service || true; fi
-    if systemctl cat pteroq.service >/dev/null 2>&1; then systemctl restart pteroq.service || true; fi
-    if systemctl is-active --quiet cloudflared; then systemctl restart cloudflared || true; fi
+    systemctl restart "php${php_version}-fpm" nginx
 
-    printf '\n%sMigration command sequence finished.%s\n' "$WHITE" "$RESET"
-    printf 'Panel path: %s\nBackups: %s\n' "$PANEL_DIR" "$BACKUP_DIR"
-    printf 'Local HTTPS test: '
-    curl -ksS --max-time 12 -o /dev/null -w 'HTTP %{http_code}\n' --resolve "gp.aliennode.in:443:127.0.0.1" https://gp.aliennode.in/ || true
-    printf '\nIf you need a new administrator, run: cd %q && php artisan p:user:make\n' "$PANEL_DIR"
-    printf 'Note: this script does not configure/alter your Cloudflare dashboard routes or upgrade MariaDB automatically.\n'
-}
-
-uninstall_panel() {
-    local answer stamp destination
-    if [[ ! -d "$PANEL_DIR" || ! -f "$PANEL_DIR/.env" || ! -f "$PANEL_DIR/artisan" ]]; then
-        printf '%sNo panel application found at %s.%s\n' "$LIGHT_RED" "$PANEL_DIR" "$RESET"
-        return 1
+    if systemctl cat pteroq.service >/dev/null 2>&1; then
+        systemctl restart pteroq.service || true
     fi
-    printf '\n%sUNINSTALL WARNING%s\n' "$RED" "$RESET"
-    printf 'This removes the live application directory by renaming it. It does NOT delete the database, Nginx config, Cloudflare Tunnel, Redis, or panel backups.\n'
-    printf 'The website will stop working at its current document root until you restore or reconfigure it.\n\n'
-    read -r -p 'Type BACKUP-AND-UNINSTALL to continue: ' answer
-    [[ "$answer" == 'BACKUP-AND-UNINSTALL' ]] || { echo 'Cancelled.'; return 0; }
-    backup_existing_panel || return 1
-    stamp="$(date +%Y%m%d-%H%M%S)"
-    destination="${PANEL_DIR}.uninstalled-${stamp}"
-    mv -- "$PANEL_DIR" "$destination"
-    printf '\n%sApplication directory moved to:%s %s\n' "$WHITE" "$RESET" "$destination"
-    printf 'Database and Nginx configuration were left untouched. Backups are in %s\n' "$BACKUP_DIR"
+
+    if systemctl cat reviq.service >/dev/null 2>&1; then
+        systemctl restart reviq.service || true
+    fi
+
+    echo
+    printf '%sMIGRATION COMMANDS COMPLETED%s\n' "$GREEN" "$RESET"
+    echo "Panel directory: $PANEL_DIR"
+    echo "Backup directory: $BACKUP_DIR"
+    echo
+
+    echo "Testing local HTTPS..."
+
+    curl -k -sS --max-time 15 \
+        --resolve "$DOMAIN:443:127.0.0.1" \
+        -o /dev/null \
+        -w 'Local HTTPS status: %{http_code}\n' \
+        "https://$DOMAIN/" || true
+
+    echo
+    echo "If no administrator account exists, run:"
+    echo "cd $PANEL_DIR && php artisan p:user:make"
+    echo
+    echo "Cloudflare tunnel routing is not modified by this migration."
 }
 
-show_menu() {
+# ------------------------------------------------------------
+# UNINSTALL
+# Back up first, then move application directory.
+# The database is NOT deleted.
+# ------------------------------------------------------------
+
+uninstall_reviactyl() {
+    local confirmation destination stamp
+
+    check_panel
+
+    echo
+    printf '%sWARNING: UNINSTALL APPLICATION%s\n' "$RED" "$RESET"
+    echo "The panel application directory will be moved."
+    echo "The database will NOT be deleted."
+    echo "Nginx and Cloudflare settings will NOT be deleted."
+    echo "The website will be unavailable until restored or reconfigured."
+    echo
+
+    read -r -p 'Type BACKUP-AND-UNINSTALL to continue: ' confirmation
+
+    if [[ "$confirmation" != "BACKUP-AND-UNINSTALL" ]]; then
+        echo "Uninstall cancelled."
+        return 0
+    fi
+
+    backup_panel
+
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    destination="${PANEL_DIR}.disabled-${stamp}"
+
+    mv -- "$PANEL_DIR" "$destination"
+
+    echo
+    printf '%s[OK]%s Application directory moved to:\n' "$GREEN" "$RESET"
+    echo "$destination"
+    echo
+    echo "Database preserved."
+    echo "Backups preserved in: $BACKUP_DIR"
+    echo "Nginx still needs reconfiguration if you want to serve another application."
+}
+
+# ------------------------------------------------------------
+# MAIN MENU
+# ------------------------------------------------------------
+
+main_menu() {
+    local option
+
     while true; do
         banner
-        printf '  %s[1]%s Install / migrate existing panel to Reviactyl\n' "$LIGHT_RED" "$RESET"
-        printf '  %s[2]%s Uninstall panel application (backup first; keeps database)\n' "$LIGHT_RED" "$RESET"
-        printf '  %s[3]%s Exit\n\n' "$LIGHT_RED" "$RESET"
+
+        printf '%s[1]%s Install / Migrate to Reviactyl\n' "$RED" "$RESET"
+        printf '%s[2]%s Uninstall application (backup first)\n' "$RED" "$RESET"
+        printf '%s[3]%s Exit\n\n' "$RED" "$RESET"
+
         read -r -p 'Select an option [1-3]: ' option
+
         case "$option" in
-            1) install_or_migrate; pause ;;
-            2) uninstall_panel; pause ;;
-            3) printf '\n%sGoodbye! — TheRynzo%s\n' "$LIGHT_RED" "$RESET"; exit 0 ;;
-            *) printf '%sInvalid option. Choose 1, 2, or 3.%s\n' "$RED" "$RESET"; sleep 1 ;;
+            1)
+                install_reviactyl
+                read -r -p $'\nPress Enter to return to the menu...' _
+                ;;
+            2)
+                uninstall_reviactyl
+                read -r -p $'\nPress Enter to return to the menu...' _
+                ;;
+            3)
+                echo "Goodbye! — TheRynzo"
+                exit 0
+                ;;
+            *)
+                printf '%sInvalid option. Select 1, 2 or 3.%s\n' "$RED" "$RESET"
+                sleep 1
+                ;;
         esac
     done
 }
 
-need_root
-show_menu
+require_root
+main_menu
