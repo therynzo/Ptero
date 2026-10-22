@@ -6,5 +6,4 @@ bash <(curl -fsSL https://raw.githubusercontent.com/therynzo/Ptero/main/reviacty
 
 
 
-
-"bash <(curl -fsSL https://raw.githubusercontent.com/therynzo/Ptero/main/unknow.sh)"
+bash <(curl -fsSL https://raw.githubusercontent.com/therynzo/Ptero/main/unknow.sh)
