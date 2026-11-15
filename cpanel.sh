@@ -1,160 +1,162 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# Official cPanel & WHM menu helper for Ubuntu 22.04 LTS.
+# This script does not bypass, extend, or remove cPanel licensing.
+set -Eeuo pipefail
 
-# Setup Colors
-RED='\033[0;31m'
-NC='\033[0m'
-WHITE='\033[1;37m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RESET='\033[0m'
+info(){ echo -e "${GREEN}[INFO]${RESET} $*"; }
+warn(){ echo -e "${YELLOW}[WARN]${RESET} $*"; }
+fail(){ echo -e "${RED}[ERROR]${RESET} $*" >&2; }
+pause(){ read -r -p "Press Enter to continue..." _; }
 
-clear
+check_root() {
+  if [[ ${EUID} -ne 0 ]]; then
+    fail "Run as root: sudo bash $0"
+    return 1
+  fi
+}
 
-# Animated Red TheRynzo Banner
-echo -e "${RED}"
-cat << "EOF" | while read -r line; do echo "$line"; sleep 0.03; done
- _____ _       ___
-|_   _| |_ ___| _ \_  _ _ _  ____ ___
-  | | | ' \ -_)   / || | ' \|_  // _ \
-  |_| |_||_\___|_|_\_, |_||_|/__/\___/
-                   |__/
-EOF
-echo -e "${NC}"
+check_os() {
+  [[ -r /etc/os-release ]] || { fail "Cannot identify operating system."; return 1; }
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != "22.04" ]]; then
+    fail "This script is specifically for Ubuntu 22.04 LTS. Detected: ${PRETTY_NAME:-unknown}"
+    return 1
+  fi
+  if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
+    fail "cPanel requires a supported x86_64/amd64 server."
+    return 1
+  fi
+}
 
-# Animated Subtitle
-SUBTITLE="cPanel Auto-Installer (Default Ports & DNS Fixed)"
-echo -e "${RED}"
-for (( i=0; i<${#SUBTITLE}; i++ )); do
-    echo -n "${SUBTITLE:$i:1}"
-    sleep 0.03
-done
-echo -e "${NC}\n"
+show_status() {
+  echo
+  if [[ -x /usr/local/cpanel/cpanel ]]; then
+    info "cPanel files detected."
+    /usr/local/cpanel/cpanel -V 2>/dev/null || true
+  else
+    warn "cPanel installation was not detected at /usr/local/cpanel."
+  fi
 
-# 1. Root Check
-if [[ "$EUID" -ne 0 ]]; then
-    echo -e "${RED}✘ Error: Please run this installer as root (sudo).${NC}"
-    exit 1
-fi
+  if command -v systemctl >/dev/null 2>&1; then
+    echo
+    systemctl --no-pager --full status cpanel 2>&1 | head -n 18 || true
+  fi
+  echo
+  echo "WHM normally uses: https://SERVER-IP:2087"
+}
 
-# 2. Forceful DNS Fix (Removes broken symlinks & rebuilds /etc/resolv.conf)
-echo -e "${RED}➤ Repairing system DNS resolution (8.8.8.8 & 1.1.1.1)...${NC}"
-chattr -i /etc/resolv.conf 2>/dev/null || true
-rm -f /etc/resolv.conf
-cat << EOF > /etc/resolv.conf
-nameserver 8.8.8.8
-nameserver 1.1.1.1
-nameserver 8.8.4.4
-EOF
+install_cpanel() {
+  check_root || return
+  check_os || return
 
-if command -v systemctl >/dev/null 2>&1; then
-    sed -i 's/#DNS=/DNS=8.8.8.8 1.1.1.1/g' /etc/systemd/resolved.conf 2>/dev/null || true
-    systemctl restart systemd-resolved >/dev/null 2>&1 || true
-fi
+  if [[ -x /usr/local/cpanel/cpanel ]]; then
+    warn "cPanel appears to already be installed. Not running the installer again."
+    show_status
+    return
+  fi
 
-# 3. OS Compatibility Verification
-echo -e "${RED}➤ Checking OS compatibility...${NC}"
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    if [[ "$ID" != "ubuntu" ]]; then
-        echo -e "${RED}⚠ Warning: Official cPanel installation requires Ubuntu 20.04 or 22.04 LTS.${NC}"
-        echo -e "${RED}Detected OS: $PRETTY_NAME${NC}"
-        read -p "Do you want to continue anyway? (y/n): " OS_CONFIRM
-        if [[ "$OS_CONFIRM" != "y" && "$OS_CONFIRM" != "Y" ]]; then
-            echo -e "${RED}Installation cancelled.${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${RED}✔ Compatible OS Detected:${NC} ${WHITE}$PRETTY_NAME${NC}"
-    fi
-fi
+  local ram_gb free_gb fqdn confirm
+  ram_gb=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
+  free_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
 
-echo ""
-echo -e "${RED}====================================================${NC}"
-echo -e "${WHITE}  STEP-BY-STEP CONFIGURATION${NC}"
-echo -e "${RED}====================================================${NC}"
+  echo
+  echo "Detected Ubuntu 22.04 LTS / amd64."
+  echo "cPanel's published compatibility table lists Ubuntu 22.04 for cPanel 134,"
+  echo "but not cPanel 136 or later. The official installer chooses what it supports."
+  echo "Do not try to force an incompatible release."
+  echo
+  echo "Approximate RAM: ${ram_gb} GB"
+  echo "Free space on /: ${free_gb} GB"
+  (( ram_gb >= 2 )) || { fail "At least 2 GB RAM is required; more is recommended."; return; }
+  (( free_gb >= 20 )) || { fail "At least 20 GB free space on / is required; more is recommended."; return; }
 
-# Step 1: Domain / Hostname Input
-while true; do
-    echo -ne "${RED}➤ Step 1: Enter your FQDN Domain/Hostname (e.g., cpanel.nexiohost.net): ${NC}"
-    read DOMAIN
-    if [ -z "$DOMAIN" ]; then
-        echo -e "${RED}Domain cannot be empty.${NC}"
-    else
-        break
-    fi
-done
+  echo
+  read -r -p "Enter a fully-qualified hostname (e.g. server.example.com): " fqdn
+  [[ "$fqdn" =~ ^(([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+[a-zA-Z]{2,}$ ]] || {
+    fail "Invalid hostname. Use a fully-qualified domain name."
+    return
+  }
 
-# Step 2: Email Input
-while true; do
-    echo -ne "${RED}➤ Step 2: Enter Admin Contact Email: ${NC}"
-    read EMAIL
-    if [ -z "$EMAIL" ]; then
-        echo -e "${RED}Email cannot be empty.${NC}"
-    else
-        break
-    fi
-done
+  echo
+  warn "Install only on a freshly installed OS. Existing websites/data may be affected."
+  warn "Use a public static IPv4 address with correct forward and reverse DNS."
+  warn "A valid paid cPanel license or official trial is still required."
+  echo
+  read -r -p 'Type INSTALL to start the official cPanel installer: ' confirm
+  [[ "$confirm" == "INSTALL" ]] || { warn "Installation cancelled."; return; }
 
-# Step 3: Set Password
-echo -ne "${RED}➤ Step 3: Set Server Root Password (Press Enter to keep current password): ${NC}"
-read -s PASSWORD
-echo ""
-if [ -n "$PASSWORD" ]; then
-    echo "root:$PASSWORD" | chpasswd
-    echo -e "${RED}✔ Root password updated successfully.${NC}"
-fi
+  export DEBIAN_FRONTEND=noninteractive
+  info "Setting hostname..."
+  hostnamectl set-hostname "$fqdn"
 
-echo -e "\n${RED}====================================================${NC}"
-echo -e "${WHITE}  STARTING CPANEL INSTALLATION${NC}"
-echo -e "${RED}====================================================${NC}\n"
+  info "Installing prerequisites..."
+  apt-get update
+  apt-get install -y --no-install-recommends curl ca-certificates perl
 
-# Set Hostname
-echo -e "${RED}➤ Setting system hostname to $DOMAIN...${NC}"
-hostnamectl set-hostname "$DOMAIN" || hostname "$DOMAIN"
+  info "Downloading the official cPanel installer over HTTPS..."
+  install -d -m 0755 /home
+  curl --fail --location --show-error --proto '=https' --tlsv1.2 \
+    -o /home/latest https://securedownloads.cpanel.net/latest
+  [[ -s /home/latest ]] || { fail "Official installer download is empty."; return; }
 
-# Update Packages & Install Core Tools
-echo -e "${RED}➤ Updating package repository...${NC}"
-apt-get update -y && apt-get install -y curl wget ufw lsof ca-certificates
+  info "Starting official cPanel installation. This can take a long time."
+  (cd /home && sh /home/latest)
 
-# Open Standard cPanel/WHM Default Ports
-echo -e "${RED}➤ Opening default cPanel/WHM ports (2082, 2083, 2086, 2087, 80, 443)...${NC}"
-if command -v ufw >/dev/null 2>&1; then
-    ufw allow 2082/tcp comment 'cPanel HTTP' >/dev/null 2>&1 || true
-    ufw allow 2083/tcp comment 'cPanel HTTPS' >/dev/null 2>&1 || true
-    ufw allow 2086/tcp comment 'WHM HTTP' >/dev/null 2>&1 || true
-    ufw allow 2087/tcp comment 'WHM HTTPS' >/dev/null 2>&1 || true
-    ufw allow 2095/tcp comment 'Webmail HTTP' >/dev/null 2>&1 || true
-    ufw allow 2096/tcp comment 'Webmail HTTPS' >/dev/null 2>&1 || true
-    ufw allow 80/tcp comment 'HTTP' >/dev/null 2>&1 || true
-    ufw allow 443/tcp comment 'HTTPS' >/dev/null 2>&1 || true
-fi
+  info "Installer process returned. Review its output for errors."
+  echo "WHM URL: https://$(hostname -I | awk '{print $1}'):2087"
+  echo "Complete setup and activate an official trial or paid license."
+}
 
-if command -v iptables >/dev/null 2>&1; then
-    iptables -I INPUT -p tcp --dport 2087 -j ACCEPT >/dev/null 2>&1 || true
-    iptables -I INPUT -p tcp --dport 2083 -j ACCEPT >/dev/null 2>&1 || true
-fi
+uninstall_info() {
+  check_root || return
+  echo
+  echo "cPanel & WHM does not provide a supported full uninstaller."
+  echo "Official removal requires backing up your data and reinstalling/reformatting"
+  echo "the server operating system from your VPS provider's control panel."
+  echo
+  echo "This menu option intentionally does NOT delete cPanel folders or packages:"
+  echo "manual deletion can leave services, databases, firewall rules, and packages"
+  echo "broken, and can damage the operating system."
+  echo
+  warn "Before rebuilding, back up all accounts, websites, databases, mail, DNS,"
+  echo "SSL certificates, and configuration. Confirm that the backup is restorable."
+  echo
+  echo "To remove cPanel safely:"
+  echo "  1. Create and verify backups."
+  echo "  2. Open your VPS provider's panel."
+  echo "  3. Choose Reinstall OS / Rebuild VPS."
+  echo "  4. Select the desired clean operating system."
+  echo "  5. Restore your data and install your chosen control panel."
+  echo
+  read -r -p "Type REBUILD to acknowledge these instructions, or press Enter to return: " confirm
+  if [[ "$confirm" == "REBUILD" ]]; then
+    warn "No changes were made. Start the OS rebuild from your VPS provider's panel."
+  fi
+}
 
-# Download Installer using Official cPanel URLs
-echo -e "${RED}➤ Downloading official cPanel installer from cPanel mirrors...${NC}"
-cd /home
-rm -f latest
+menu() {
+  while true; do
+    clear 2>/dev/null || true
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "${CYAN}       cPanel & WHM Ubuntu 22.04 Manager${RESET}"
+    echo -e "${CYAN}====================================================${RESET}"
+    echo "  1) Install cPanel (official installer)"
+    echo "  2) Uninstall cPanel (safe removal instructions)"
+    echo "  3) Check cPanel installation/status"
+    echo "  4) Exit"
+    echo
+    read -r -p "Select an option [1-4]: " choice
+    case "$choice" in
+      1) install_cpanel; pause ;;
+      2) uninstall_info; pause ;;
+      3) show_status; pause ;;
+      4) exit 0 ;;
+      *) warn "Invalid option."; pause ;;
+    esac
+  done
+}
 
-if curl -o latest -L https://securedownloads.cpanel.net/latest; then
-    echo -e "${RED}✔ Successfully downloaded installer from primary cPanel server.${NC}"
-else
-    echo -e "${RED}⚠ Primary mirror failed, trying secondary fallback mirror...${NC}"
-    curl -o latest -L http://httpupdate.cpanel.net/latest
-fi
-
-# Execute Installer
-echo -e "${RED}➤ Launching official cPanel installation process (takes 15-30 minutes)...${NC}"
-sh latest
-
-PUBLIC_IP=$(curl -s -m 5 ifconfig.me || hostname -I | awk '{print $1}')
-
-echo -e "\n${RED}====================================================${NC}"
-echo -e "${WHITE}  CPANEL INSTALLATION COMPLETE${NC}"
-echo -e "${RED}====================================================${NC}"
-echo -e "${RED}➤ WHM Admin (Default SSL)  :${NC} ${WHITE}https://$PUBLIC_IP:2087${NC} or ${WHITE}https://$DOMAIN:2087${NC}"
-echo -e "${RED}➤ cPanel User (Default SSL) :${NC} ${WHITE}https://$PUBLIC_IP:2083${NC} or ${WHITE}https://$DOMAIN:2083${NC}"
-echo -e "${RED}➤ Admin Email              :${NC} ${WHITE}$EMAIL${NC}"
-echo -e "${RED}➤ Hostname                 :${NC} ${WHITE}$DOMAIN${NC}"
-echo -e "${RED}====================================================${NC}\n"
+check_root || exit 1
+menu
